@@ -87,6 +87,12 @@ func prepareExpected() {
 		test = append(test, t)
 	}
 
+	t = Test{CIDR: "", Range: "10.0.254.255-10.2.2.0"}
+	{
+		t.Expected = []string{"10.0.254.255", "10.0.255.*", "10.2.2.0", "10.2.1.*", "10.2.0.*", "10.1.*"}
+		test = append(test, t)
+	}
+
 	// IPv4 error
 	t = Test{CIDR: "1271.0.0.1/32", Range: "1271.0.0.1-127.0.0.1"}
 	{
@@ -121,7 +127,7 @@ func prepareExpected() {
 
 	t = Test{CIDR: "::ffff:192.168.0.1/112", Range: "::ffff:192.168.0.0-::ffff:192.168.255.255"}
 	{
-		t.Expected = []string{"::ffff:192.168:*"}
+		t.Expected = []string{"::ffff:192.168.*"}
 		test = append(test, t)
 	}
 
@@ -138,6 +144,18 @@ func prepareExpected() {
 	t = Test{CIDR: "2001:20::/111", Range: "2001:20::-2001:20::1:ffff"}
 	{
 		t.Expected = []string{"2001:20::*", "2001:20::1:*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::ffff:ffff-::2:0:0"}
+	{
+		t.Expected = []string{"::ffff:ffff", "::2:0:0", "::1:*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::fffe:ffff:ffff-::2:1:0:0"}
+	{
+		t.Expected = []string{"::fffe:ffff:ffff", "::ffff.*", "::2:1:0:0", "::2:0:*", "::1:*"}
 		test = append(test, t)
 	}
 
@@ -241,6 +259,49 @@ func prepareExpected() {
 	t = Test{CIDR: "1111::4444:5555:6666:7777:8888/128", Range: "1111::4444:5555:6666:7777:8888-1111::4444:5555:6666:7777:8888"}
 	{
 		t.Expected = []string{"1111::4444:5555:6666:7777:8888"}
+		test = append(test, t)
+	}
+
+	// 4in6
+
+	t = Test{CIDR: "::ffff:a00:0/104", Range: "::ffff:10.0.0.0-::ffff:10.255.255.255"}
+	{
+		t.Expected = []string{"::ffff:10.*"}
+		test = append(test, t)
+	}
+	t = Test{CIDR: "::ffff:a00:0/111", Range: "::ffff:10.0.0.0-::ffff:10.1.255.255"}
+	{
+		t.Expected = []string{"::ffff:10.0.*", "::ffff:10.1.*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "::ffff:ac10:0/127", Range: "::ffff:172.16.0.0-::ffff:172.16.0.1"}
+	{
+		t.Expected = []string{"::ffff:172.16.0.0", "::ffff:172.16.0.1"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::ffff:10.0.255.255-::ffff:10.2.0.0"}
+	{
+		t.Expected = []string{"::ffff:10.0.255.255", "::ffff:10.2.0.0", "::ffff:10.1.*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::ffff:10.0.254.255-::ffff:10.2.2.0"}
+	{
+		t.Expected = []string{"::ffff:10.0.254.255", "::ffff:10.0.255.*", "::ffff:10.2.2.0", "::ffff:10.2.1.*", "::ffff:10.2.0.*", "::ffff:10.1.*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::ffff:10.1.0.0-::ffff:10.1.1.255"}
+	{
+		t.Expected = []string{"::ffff:10.1.0.*", "::ffff:10.1.1.*"}
+		test = append(test, t)
+	}
+
+	t = Test{CIDR: "", Range: "::ffff:10.0.0.0-::ffff:10.1.255.255"}
+	{
+		t.Expected = []string{"::ffff:10.0.*", "::ffff:10.1.*"}
 		test = append(test, t)
 	}
 

@@ -11,13 +11,13 @@ import (
 	"strings"
 )
 
-func ipv6Uint16(ip []byte, i int) uint16 {
+func beUint16(ip []byte, i int) uint16 {
 	return uint16(ip[2*i])<<8 | uint16(ip[2*i+1])
 }
 
-func setIpv6Uint16(ip []byte, i int, v uint16) {
-	ip[2*i] = byte((v >> 8) & 0xffff)
-	ip[2*i+1] = byte(v & 0xffff)
+func setbeUint16(ip []byte, i int, v uint16) {
+	ip[2*i] = byte(v >> 8)
+	ip[2*i+1] = byte(v)
 }
 
 func genV4(ip []byte, block int, sv, ev uint8) (ps []string) {
@@ -44,7 +44,7 @@ func genV4(ip []byte, block int, sv, ev uint8) (ps []string) {
 func genV6(ip []byte, block int, sv, ev uint16, is4In6 bool) (ps []string) {
 	tail := ""
 	for i := block + 1; i < 8; i++ {
-		setIpv6Uint16(ip, i, 0xffff)
+		setbeUint16(ip, i, 0xffff)
 		if is4In6 {
 			switch i {
 			case 6:
@@ -57,29 +57,53 @@ func genV6(ip []byte, block int, sv, ev uint16, is4In6 bool) (ps []string) {
 		}
 	}
 	ext := "0"
-	for i := sv; i <= ev; i++ {
-		setIpv6Uint16(ip, block, i)
+	eb4In6 := ev
+	el8 := ev & 0xff
+	if el8 != 0xff && el8 != 0 {
+		eb4In6 &= 0xff00
+	}
+	step := uint16(1)
+	for i := sv; i <= ev; i += step {
+		setbeUint16(ip, block, i)
 		addr := netip.AddrFrom16([16]byte(ip))
 		ipr := strings.TrimSuffix(addr.String(), tail)
-		x := block + 1
-		if block < 7 {
-			ipr += ":*"
-			x++
+		if is4In6 {
+			if step == 1 && i&0xff == 0 && i < eb4In6 {
+				step = 0x100
+			} else if i >= eb4In6 {
+				step = 1
+			}
+			if step == 0x100 {
+				ipr = ipr[:len(ipr)-2]
+			}
+		}
+		dCount := block + 1
+		if block < 7 || step == 0x100 {
+			if is4In6 {
+				ipr += ".*"
+			} else {
+				ipr += ":*"
+			}
+			dCount++
 		}
 		ps = append(ps, ipr)
 		prs := strings.Split(ipr, ":")
-		if len(prs) <= x && block < 5 {
-			mod := false
+		pCount := len(prs)
+		sCount := dCount - pCount
+		zCount := sCount + 1
+		mod := false
+		if prs[0] == "" {
+			prs[0] = "0"
+			mod = true
+			zCount++
+		}
+		if zCount < 3 && block < 5 {
 			if i == sv {
-				for j := 0; j < x-len(prs); j++ {
+				for j := 0; j < sCount; j++ {
 					ext += ":0"
 				}
 			}
-			if prs[0] == "" {
-				prs[0] = "0"
-				mod = true
-			}
-			for j := 1; j < len(prs); j++ {
+			for j := 1; j < pCount; j++ {
 				if prs[j] == "" {
 					prs[j] = ext
 					mod = true
@@ -88,35 +112,34 @@ func genV6(ip []byte, block int, sv, ev uint16, is4In6 bool) (ps []string) {
 			}
 			iBlock := block
 			// refer test: IPv6z1, IPv6z2
-			pz := 0
-			for j := len(prs) - 2; j >= 0; j-- {
+			preZero := 0
+			for j := pCount - 2; j >= 0; j-- {
 				if prs[j] == "0" {
-					pz++
+					preZero++
 				} else {
 					break
 				}
 			}
-			if pz > 0 {
-				x := len(prs)
-				switch pz {
+			if preZero > 0 {
+				switch preZero {
 				case 2:
 					// IPv6z2
-					if x > 3 {
-						prs[x-3] = ""
-						prs[x-2] = "*"
-						prs = prs[:x-1]
+					if pCount > 3 {
+						prs[pCount-3] = ""
+						prs[pCount-2] = "*"
+						prs = prs[:pCount-1]
 						mod = true
 						iBlock -= 2
 					}
 				case 1:
 					// IPv6z1
-					if x == 2 {
+					if pCount == 2 {
 						// ::/16
-						prs[x-1] = ":*"
-					} else if mod && x > 2 {
+						prs[pCount-1] = ":*"
+					} else if mod && pCount > 2 {
 						ps = append(ps, strings.Join(prs, ":"))
 					}
-					prs[x-2] = ""
+					prs[pCount-2] = ""
 					mod = true
 					iBlock--
 				}
@@ -124,7 +147,7 @@ func genV6(ip []byte, block int, sv, ev uint16, is4In6 bool) (ps []string) {
 			if mod {
 				if iBlock == 4 {
 					// IPv6s3z
-					prs[len(prs)-1] = ":"
+					prs[pCount-1] = ":"
 				}
 				ps = append(ps, strings.Join(prs, ":"))
 			}
@@ -136,24 +159,20 @@ func genV6(ip []byte, block int, sv, ev uint16, is4In6 bool) (ps []string) {
 	return
 }
 
-// ProcessCIDR generates string IP prefix pattern from CIDR.
-func ProcessCIDR(s string) (ps []string, err error) {
-	p, err := netip.ParsePrefix(s)
-	if err != nil {
-		return
-	}
-	m := p.Bits()
+func processPrefix(p netip.Prefix) (ps []string) {
 	addr := p.Addr()
 	if p.IsSingleIP() {
 		ps = append(ps, addr.String())
 		return
 	}
+	m := p.Bits()
 	ip := addr.AsSlice()
 	var ipr []string
 	if addr.Is4() {
 		prefixBlock := int((m - 1) / 8)
 		variableBits := m % 8
 		if variableBits > 0 || m == 0 {
+			// must have a prefix
 			variableBits = 8 - variableBits
 		}
 		sv := ip[prefixBlock] & (0xff << variableBits)
@@ -163,14 +182,24 @@ func ProcessCIDR(s string) (ps []string, err error) {
 		prefixBlock := int((m - 1) / 16)
 		variableBits := m % 16
 		if variableBits > 0 || m == 0 {
+			// must have a prefix
 			variableBits = 16 - variableBits
 		}
-		sv := ipv6Uint16(ip, prefixBlock) & (0xffff << variableBits)
+		sv := beUint16(ip, prefixBlock) & (0xffff << variableBits)
 		ev := sv + 1<<variableBits - 1
 		ipr = genV6(ip, prefixBlock, sv, ev, addr.Is4In6())
 	}
 	ps = append(ps, ipr...)
 	return
+}
+
+// ProcessCIDR generates string IP prefix pattern from CIDR.
+func ProcessCIDR(s string) (ps []string, err error) {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return
+	}
+	return processPrefix(p), nil
 }
 
 // ProcessRange generates string IP prefix pattern from IP range.
@@ -208,95 +237,148 @@ func ProcessRange(s, e string) (ps []string, err error) {
 				break
 			}
 		}
-		sb := false
-		for i := 3; i > prefixBlock; i-- {
+		carry := false
+		for i := 3; i >= prefixBlock; i-- {
+			if carry {
+				ip1[i]++
+			}
+			if i == prefixBlock {
+				break
+			}
 			vm := ip1[i]
 			if vm == 0 {
 				continue
 			}
 			for j := int(vm); j < 0x100; j++ {
 				addr := netip.AddrFrom4([4]byte(ip1))
-				ps = append(ps, addr.String())
+				rs := addr.String()
+				if i < 3 {
+					rs = rs[:len(rs)-1] + "*"
+				}
+				ps = append(ps, rs)
 				ip1[i]++
-				sb = true
 			}
+			carry = true
 		}
-		if sb {
-			ip1[prefixBlock]++
-		}
-		eb := false
-		for i := 3; i > prefixBlock; i-- {
+		borrow := false
+		for i := 3; i >= prefixBlock; i-- {
+			if borrow {
+				ip2[i]--
+			}
+			if i == prefixBlock {
+				break
+			}
 			vm := ip2[i]
 			if vm == 0xff {
 				continue
 			}
 			for j := int(vm); j >= 0; j-- {
 				addr := netip.AddrFrom4([4]byte(ip2))
-				ps = append(ps, addr.String())
+				rs := addr.String()
+				if i < 3 {
+					rs = rs[:len(rs)-3] + "*"
+				}
+				ps = append(ps, rs)
 				ip2[i]--
-				eb = true
 			}
-		}
-		if eb {
-			ip2[prefixBlock]--
+			borrow = true
 		}
 		if prefixBlock > 0 && ip1[prefixBlock] == 0 && ip2[prefixBlock] == 0xff {
 			prefixBlock--
 		}
 		ipr = genV4(ip1, prefixBlock, ip1[prefixBlock], ip2[prefixBlock])
 	} else if addr1.Is6() {
+		is4In6 := addr1.Is4In6()
 		prefixBlock := 0
 		for i := 0; i < 8; i++ {
-			if ipv6Uint16(ip1, i) == ipv6Uint16(ip2, i) {
+			if beUint16(ip1, i) == beUint16(ip2, i) {
 				prefixBlock++
 			} else {
 				break
 			}
 		}
-		sb := false
-		for i := 7; i > prefixBlock; i-- {
-			vm := ipv6Uint16(ip1, i)
+		carry := false
+		for i := 7; i >= prefixBlock; i-- {
+			vm := beUint16(ip1, i)
+			if carry {
+				vm++
+				setbeUint16(ip1, i, vm)
+			}
+			if i == prefixBlock {
+				break
+			}
 			if vm == 0 {
 				continue
 			}
-			for j := int(vm); j < 0x10000; j++ {
+			step := 1
+			for j := int(vm); j < 0x10000; j += step {
 				addr := netip.AddrFrom16([16]byte(ip1))
-				ps = append(ps, addr.String())
-				vm++
-				setIpv6Uint16(ip1, i, vm)
-				sb = true
+				rs := addr.String()
+				isIP := true
+				if is4In6 {
+					if step == 1 && j&0xff == 0 {
+						step = 0x100
+					}
+					if step == 0x100 {
+						rs = rs[:len(rs)-1] + "*"
+					}
+				} else if i < 7 {
+					ipri := processPrefix(netip.PrefixFrom(addr, 16*(i+1)))
+					ps = append(ps, ipri...)
+					isIP = false
+				}
+				if isIP {
+					ps = append(ps, rs)
+				}
+				vm += uint16(step)
+				setbeUint16(ip1, i, vm)
 			}
+			carry = true
 		}
-		if sb {
-			v := ipv6Uint16(ip1, prefixBlock)
-			v++
-			setIpv6Uint16(ip1, prefixBlock, v)
-		}
-		eb := false
-		for i := 7; i > prefixBlock; i-- {
-			vm := ipv6Uint16(ip2, i)
+		borrow := false
+		for i := 7; i >= prefixBlock; i-- {
+			vm := beUint16(ip2, i)
+			if borrow {
+				vm--
+				setbeUint16(ip2, i, vm)
+			}
+			if i == prefixBlock {
+				break
+			}
 			if vm == 0xffff {
 				continue
 			}
-			for j := int(vm); j >= 0; j-- {
+			step := 1
+			for j := int(vm); j >= 0; j -= step {
 				addr := netip.AddrFrom16([16]byte(ip2))
-				ps = append(ps, addr.String())
-				vm--
-				setIpv6Uint16(ip2, i, vm)
-				eb = true
+				rs := addr.String()
+				isIP := true
+				if is4In6 {
+					if step == 1 && j&0xff == 0xff {
+						step = 0x100
+					}
+					if step == 0x100 {
+						rs = rs[:len(rs)-3] + "*"
+					}
+				} else if i < 7 {
+					ipri := processPrefix(netip.PrefixFrom(addr, 16*(i+1)))
+					ps = append(ps, ipri...)
+					isIP = false
+				}
+				if isIP {
+					ps = append(ps, rs)
+				}
+				vm -= uint16(step)
+				setbeUint16(ip2, i, vm)
 			}
+			borrow = true
 		}
-		if eb {
-			v := ipv6Uint16(ip2, prefixBlock)
-			v--
-			setIpv6Uint16(ip2, prefixBlock, v)
-		}
-		if prefixBlock > 0 && ipv6Uint16(ip1, prefixBlock) == 0 && ipv6Uint16(ip2, prefixBlock) == 0xffff {
+		if prefixBlock > 0 && beUint16(ip1, prefixBlock) == 0 && beUint16(ip2, prefixBlock) == 0xffff {
 			prefixBlock--
 		}
-		sv := ipv6Uint16(ip1, prefixBlock)
-		ev := ipv6Uint16(ip2, prefixBlock)
-		ipr = genV6(ip1, prefixBlock, sv, ev, addr1.Is4In6())
+		sv := beUint16(ip1, prefixBlock)
+		ev := beUint16(ip2, prefixBlock)
+		ipr = genV6(ip1, prefixBlock, sv, ev, is4In6)
 	}
 	ps = append(ps, ipr...)
 	return

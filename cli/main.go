@@ -68,6 +68,16 @@ func main_int() int {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
 		}
+		x := len(b)
+		switch b[x-1] {
+		case '\n':
+			b = b[:x-1]
+			if b[x-2] == '\r' {
+				b = b[:x-2]
+			}
+		case '\r':
+			b = b[:x-1]
+		}
 		lines := strings.Split(string(b), "\n")
 		for _, line := range lines {
 			processLine(strings.TrimSpace(line), cc)
